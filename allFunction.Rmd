@@ -1,0 +1,603 @@
+---
+title: "All Function R Notebook"
+output: html_notebook
+---
+
+This is the first model, Run KNN once, with resample positive after split.
+
+```{r}
+library(caret)
+install.packages("ROSE")
+library(ROSE)
+install.packages("caTools")
+library(caTools)
+install.packages("pROC")
+library(pROC)
+set.seed(300)
+library(ggplot2)
+install.packages("kknn")
+library(kknn)
+
+
+load(file="~/NNS.RData")
+load(file="~/Annotation.RData")
+
+z_score <- z_score_cluster[,-17]
+annotation <- totalLabels[, c("PMA", "po_br")]
+z_score$label <- totalLabels$po_br/(totalLabels$po_br + totalLabels$ng_og +
+                                      0.0001)
+
+z_score$category <- unlist(lapply(z_score$label, function(x) if(x > 0) {1} else {0})) # 0.5
+
+uniqId <- unlist(lapply(totalLabels$col1, function(x) unlist(strsplit(x, "_"))[[1]]))
+z_score$uniqID <- uniqId
+tmp <- z_score[z_score$category == 1,]
+tmp <- table(tmp$uniqID)
+tmp <- names(tmp[tmp >= 1]) # 67 id has 1s, total 110
+
+idSet <- tmp
+data <- z_score[z_score$uniqID %in% idSet,]
+
+data <- data[,-c(17,19)]
+#data$category2 <- factor(data$category)
+#levels(data$category2) <- make.names(levels(data$category2))
+```
+
+1.1 Experiment on finding best k with resample possitive, then draw ROC curve for best KNN model with sampling.
+
+```{r}
+# Load necessary libraries
+library(caTools)
+library(ROSE)
+library(caret)
+library(pROC)
+```
+```{r}
+
+# Define the number of repeats
+n_repeats <- 1
+k_values <- seq(5, 20, by = 1)  # Loop through odd k values from 5 to 45
+
+# Initialize an empty dataframe to store results
+results_df <- data.frame()
+
+# Loop over k values
+for (k in k_values) {
+  # Repeat experiment for each k
+ for (i in 1:n_repeats) {
+   positive <- df[df$category == 1,]
+   negative <- df[df$category == 0,]
+   set.seed(123)  # Ensure reproducibility
+   random_rows <- negative[sample(nrow(negative), dim(positive)[1]), ]  # Select `n` random rows
+   tmp <- rbind(positive, random_rows)
+   tmp <- tmp[sample(nrow(tmp)), ]  # Shuffle rows
+    split <- caTools::sample.split(tmp$category, 
+                         SplitRatio = 0.9) # 0.75
+    
+    train <- subset(tmp, 
+                   split == TRUE)
+    test <- subset(tmp, 
+                  split == FALSE)
+    
+    # resample positive as the same number as negative
+    #over <- ROSE::ovun.sample(category~., data = train, method = "over", 
+                              #N = dim(train[train$category==0,])[[1]] * 2)$data
+    test_pred_2 <- class::knn(train = train[,-dim(train)[2]], test = test[,-dim(da)[2]], cl=train$category, k=k)
+    test$category <- as.factor(test$category)
+    confusion <- confusionMatrix(test_pred_2, test$category, positive = "1")
+    results_df <- rbind(results_df, as.data.frame(t(confusion$byClass))) # "Pos Pred Value" is precision
+  }
+}
+results_df <- results_df[, c("Balanced Accuracy", "Precision",  "Recall", "F1")]
+# plot Prcision vs. k value
+plot(k_values, results_df$Precision, type = "S",
+     xlab = "Number of Neighbors (k)", ylab = "Precision",
+     main = "KNN Performance", col = "blue", xlim = c(5, 20),
+     xaxt = "n")  # Suppress default x-axis
+
+axis(1, at = seq(5, 20, by = 1))  # Add custom x-axis ticks from 5 to 45
+
+```
+
+```{r}
+plot(k_values, results_df$F1, type = "S",
+     xlab = "Number of Neighbors (k)", ylab = "Accuracy",
+     main = "KNN Performance", col = "blue", xlim = c(5, 20),
+     xaxt = "n")  # Suppress default x-axis
+
+axis(1, at = seq(5, 20, by = 1))  # Add custom x-axis ticks from 5 to 45
+# Add vertical lines at k = 45 and k = 99
+#abline(v = c(45, 99), col = "red", lty = 2, lwd = 2)
+
+# Manually add x-axis ticks at custom intervals
+#axis(1, at = seq(5, max(knnFit$results$k), by = 20))
+```
+
+Experiment with no sampling, first find best k by training ROC and then use best knn model to plot the ROC curve. Don't need to plot ROC, the AUC is 0.5, not good. Error when calculating Specificity
+
+```{r}
+library(pROC)
+df$category2 <- factor(as.character(df$category))
+levels(df$category2) <- make.names(levels(df$category))
+# recalculate knnFit
+# function to return a ROC curve
+# use a knnFit model trained on categorical labels (e.g., "0" and "1") to predict probabilities IF the model is trained with classProbs = TRUE in trainControl().
+ctrl <- trainControl(method="repeatedcv",
+                   number=10, 
+                   repeats = 1,
+                   classProbs=TRUE, 
+                   summaryFunction = twoClassSummary)
+# split to training and testing
+knnFit <- caret::train(category2 ~ ., data = df[, -17], method = "knn", trControl = ctrl, tuneLength = 40)
+# training k 
+plot(knnFit$results$k, knnFit$results$ROC, type = "S",
+   xlab = "Number of Neighbors (k)", ylab = "ROC (AUC)",
+   main = "KNN ROC Performance", col = "blue")  # Suppress default x-axis
+
+```
+
+Not able to calculate specificity
+
+```{r}
+
+sensitivity <- knnFit$results$Sens # All 1.0 after 7
+specificity <- knnFit$results$Spec # All 0.0 after 7
+prevalence <- 557/1337#173 / 2003 # P(Y=1)
+
+precision <- calculate_precision(sensitivity, specificity, prevalence)
+print(precision)
+```
+
+Not Useful
+
+```{r}
+calculate_precision <- function(sensitivity, specificity, prevalence) {
+  (sensitivity * prevalence) / (sensitivity * prevalence + (1 - specificity) * (1 - prevalence))
+}
+```
+
+```{r}
+# Don't need this part, the AUC value is around 50%. This code can be used later. 
+test_pred <- predict(knnFit, test[,-17], type = "prob")[,2]  # Get probability of class "1"
+roc_curve <- pROC::roc(test$category, test_pred, levels = c("0", "1"))
+print(roc_curve$thresholds)
+# 0.672
+auc_value <- round(roc_curve$auc, 3)  # Round AUC value for clarity
+# plot with ggplot
+# get FPR and TPR
+
+FPR = 1 - roc_curve$specificities
+TPR = roc_curve$sensitivities
+roc_frame <- data.frame(
+    TPR = TPR,
+    FPR = FPR
+  )
+ggplot(roc_frame, aes(x = FPR, y = TPR)) +
+geom_line(color = "blue", size = 1) +  # Plot ROC curve
+geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") + 
+labs(title = "ROC Curve", x = "False Positive Rate (FPR)", y = "True Positive Rate (TPR)") +
+theme_bw() +
+coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +  # Ensure square shape+
+annotate("text", x = 0.6, y = 0.2, label = paste("AUC =", auc_value), color = "blue", size = 5)  # Add AUC text
+
+```
+
+1.2 Experiment on best prediction when use one time training and testing
+
+```{r}
+getVary <- function(x){
+  mean_accuracy <- mean(x)
+  sd_accuracy <- sd(x)
+  cat(round(mean_accuracy, 2), "±", round(sd_accuracy, 2))
+}
+```
+
+Calculate df, which in idSet, but category is based on > 0.5
+
+```{r}
+z_score$category <- unlist(lapply(z_score$label, function(x) if(x > 0) {1} else {0}))
+
+uniqId <- unlist(lapply(totalLabels$col1, function(x) unlist(strsplit(x, "_"))[[1]]))
+z_score$uniqID <- uniqId
+tmp <- z_score[z_score$category == 1,]
+tmp <- table(tmp$uniqID)
+tmp <- names(tmp[tmp >= 1]) # 67 id has 1s, total 110
+
+idSet <- tmp
+data <- z_score[z_score$uniqID %in% idSet,]
+data$category05 <- unlist(lapply(data$label, function(x) if(x > 0.5) {1} else {0}))
+
+df <- data[,-c(17,18,19)]
+```
+```{r}
+
+experiment <- function(df, ratio, n_repeats, k_value){ # error
+  # sample.split to create an index 
+  results_df <- data.frame()
+  for (i in 1:n_repeats) {
+    split <- caTools::sample.split(df$category05, 
+                         SplitRatio = ratio) # 0.75
+    
+    train <- subset(df, 
+                   split == TRUE)
+    test <- subset(df, 
+                  split == FALSE)
+    print(dim(train))
+    print(dim(test))
+    train$category05 <- factor(train$category05)
+    # resample positive as the same number as negative
+    over <- ROSE::ovun.sample(category05~., data = train, method = "over", 
+                              N = dim(train[train$category05==0,])[[1]] * 2)$data
+    test_pred_2 <- class::knn(train = over[,-dim(df)[2]], test = test[,-dim(df)[2]], cl=over$category05, k=k_value) 
+    test$category05 <- as.factor(test$category05)
+    confusion <- confusionMatrix(test_pred_2, test$category05, positive = "1")
+    results_df <- rbind(results_df, as.data.frame(t(confusion$byClass))) # "Pos Pred Value" is precision
+  }
+  results_df <- results_df[, c("Balanced Accuracy", "Precision",  "Recall", "F1")]
+  getVary(results_df$`Balanced Accuracy`)
+  getVary(results_df$Precision)
+  getVary(results_df$Recall)
+  getVary(results_df$F1)
+}
+```
+
+Experiment of KNN-1
+
+```{r}
+df$category05 <- as.factor(df$category05)
+#df$category <- factor(as.character(df$category))
+#levels(df$category) <- make.names(levels(df$category))
+experiment(df, 0.75, 20, 8)
+```
+
+KNN-1: 0.72 ± 0.040.32 ± 0.030.84 ± 0.060.46 ± 0.03
+
+```{r}
+df <- data[,-18]
+#data$category <- as.factor(z_score$category)
+experiment(df, 0.9, 20, 8)
+
+```
+
+KNN-2 Results: 0.71 ± 0.050.31 ± 0.040.81 ± 0.080.44 ± 0.05
+
+```{r}
+z_score$category <- unlist(lapply(z_score$label, function(x) if(x > 0) {1} else {0}))
+
+uniqId <- unlist(lapply(totalLabels$col1, function(x) unlist(strsplit(x, "_"))[[1]]))
+z_score$uniqID <- uniqId
+tmp <- z_score[z_score$category == 1,]
+tmp <- table(tmp$uniqID)
+tmp <- names(tmp[tmp >= 1]) # 67 id has 1s, total 110
+
+idSet <- tmp
+data <- z_score[z_score$uniqID %in% idSet,]
+
+df <- data[,-c(17,19)]
+
+experiment(df, 0.9, 20, 8)
+```
+
+1.2.1 Label as prob \> 0 KNN KNN-3 Results: 0.75 ± 0.03 0.67 ± 0.04 0.77 ± 0.04 0.72 ± 0.03
+
+1.3 Feature Selection for KNN
+
+```{r}
+
+cor_matrix <- cor(df[, -which(names(data) == "category")])
+high_corr_features <- findCorrelation(cor_matrix, cutoff = 0.8)
+da <- df[, -high_corr_features]  # Remove highly correlated features
+da <- da[,-12]
+experiment2(da, 0.9, 20, 5)
+```
+0.76 ± 0.03 0.69 ± 0.04 0.79 ± 0.05 0.73 ± 0.04
+```{r}
+experiment2 <- function(da, ratio, n_repeats, k_value){ # error
+  # sample.split to create an index 
+  results_df <- data.frame()
+  for (i in 1:n_repeats) {
+    split <- caTools::sample.split(da$category, 
+                         SplitRatio = ratio) # 0.75
+    
+    train <- subset(da, 
+                   split == TRUE)
+    test <- subset(da, 
+                  split == FALSE)
+    train$category <- factor(train$category)
+    # resample positive as the same number as negative
+    over <- ROSE::ovun.sample(category~., data = train, method = "over", 
+                              N = dim(train[train$category==0,])[[1]] * 2)$data
+    test_pred_2 <- class::knn(train = over[,-dim(da)[2]], test = test[,-dim(da)[2]], cl=over$category, k=k_value) 
+    test$category <- as.factor(test$category)
+    confusion <- confusionMatrix(test_pred_2, test$category, positive = "1")
+    results_df <- rbind(results_df, as.data.frame(t(confusion$byClass))) # "Pos Pred Value" is precision
+  }
+  results_df <- results_df[, c("Balanced Accuracy", "Precision",  "Recall", "F1")]
+  getVary(results_df$`Balanced Accuracy`)
+  getVary(results_df$Precision)
+  getVary(results_df$Recall)
+  getVary(results_df$F1)
+}
+```
+
+1.4 Weighted Distance for KNN: The function computes distances between test and training points using Euclidean distance (distance = 2). It selects k nearest neighbors for each test sample. It applies the "optimal" kernel function to weight neighbors based on distance. It assigns a predicted class label based on the weighted votes of neighbors.
+
+```{r}
+n_repeats <- 20
+results_df <- data.frame()
+for (i in 1:n_repeats) {
+split = caTools::sample.split(da$category, 
+                     SplitRatio = 0.9) # 0.75
+
+train = subset(da, 
+               split == TRUE)
+test = subset(da, 
+              split == FALSE)
+
+# resample positive as the same number as negative
+over <- ROSE::ovun.sample(category~., data = train, method = "over", 
+                          N = dim(train[train$category==0,])[[1]] * 2)$data
+# Assign weights: Higher weight (e.g., 2x) to positive samples
+#weights <- ifelse(over$category == 1, 2, 1)  # Give double weight to positive class
+knn_model <- kknn::kknn(category ~ ., train = over, test = test[,-dim(da)[2]], k = 8, distance = 2, kernel = "optimal") #"epanechnikov"
+test_pred_2 <- predict(knn_model)
+test_pred_3 <- as.factor(as.integer(test_pred_2 > 0.5))
+test$category <- factor(test$category)
+confusion <- confusionMatrix(test_pred_3, test$category, positive = "1")
+
+results_df <- rbind(results_df, as.data.frame(t(confusion$byClass)))
+}
+
+results_df <- results_df[, c("Balanced Accuracy", "Precision",  "Recall", "F1")]
+getVary(results_df$`Balanced Accuracy`)
+getVary(results_df$Precision)
+getVary(results_df$Recall)
+getVary(results_df$F1)
+# Not good
+```
+
+Balanced Accuracy Precision Recall F1 1 0.67 ± 0.040.61 ± 0.050.64 ± 0.060.63 ± 0.05
+
+1.6 Kmean guided KNN 1.6.1 Get centroid
+
+```{r}
+# Filter rows where label > 0 and get dimensions
+positive_data <- z_score[z_score$label > 0, ]  # Subset the data
+negative_data <- z_score[z_score$label == 0, ]  # Subset the data
+
+# run k-mean for positive first
+df_n <- negative_data[, -c(17,18)]
+kmeans_result_n <- kmeans(df_n, centers = 2, nstart = 10)
+
+# Perform k-means clustering with 3 clusters
+df <- positive_data[, -c(17, 18)]
+kmeans_result <- kmeans(df, centers = 2, nstart = 10)
+
+ne_cen <- data.frame(kmeans_result_n$centers)
+ne_cen$label <- c("n1", "n2")
+po_cen <- data.frame(kmeans_result$centers)
+po_cen$label <- c("p1", "p2")
+total <- rbind(po_cen, ne_cen) # centroid for kmean
+```
+
+1.6.2 Run PCA to cluster centroids. Even though the acc is high for positive prediction, we are not sure the labels are accurate.
+
+```{r}
+install.packages("factoextra")
+library(factoextra)
+install.packages("ggpubr")
+library(ggpubr)
+
+
+# Compute PCA and extract individual coordinates
+# Dimension reduction using PCA
+res.pca <- prcomp(total[, -ncol(total)],  scale = TRUE)
+# Coordinates of individuals
+ind.coord <- as.data.frame(get_pca_ind(res.pca)$coord)
+
+# Add Species groups from the original data sett
+ind.coord$category <- as.factor(total$label) # here
+# Data inspection
+head(ind.coord)
+
+# Percentage of variance explained by dimensions
+eigenvalue <- round(get_eigenvalue(res.pca), 1)
+variance.percent <- eigenvalue$variance.percent
+head(eigenvalue)
+
+ggscatter(
+  ind.coord, x = "Dim.1", y = "Dim.2", 
+  color = "category", palette = "npg", ellipse = TRUE, ellipse.type = "convex",
+  shape = "category", size = 2,  legend = "right", ggtheme = theme_bw(),
+  xlab = paste0("Dim 1 (", variance.percent[1], "% )" ),
+  ylab = paste0("Dim 2 (", variance.percent[2], "% )" )
+) +
+  stat_mean(aes(color = category), size = 4)
+
+```
+
+From the centroid PCA, we can see p1 and n1 are similar. Run kmean with centroid again
+
+```{r}
+df <- z_score[, -17]
+category <- unlist(lapply(z_score$label, function(x) if(x > 0) {1} else {0})) # 0.5
+df$category <- as.factor(category)
+
+res.km <- kmeans(df[, -ncol(df)], centers = total[, -ncol(total)], nstart = 1, iter.max = 100)
+df$cluster <- res.km$cluster
+# write a for loop 20 times:
+split = caTools::sample.split(df$category, 
+                     SplitRatio = 0.75) # 0.75
+train = subset(df, 
+               split == TRUE)
+test = subset(df, 
+              split == FALSE)
+# resample positive as the same number as negative
+over <- ROSE::ovun.sample(category~., data = train, method = "over", 
+                          N = dim(train[train$category==0,])[[1]] * 2)$data
+#cor_matrix <- cor(over[, -which(names(over) == "category")])
+#high_corr_features <- findCorrelation(cor_matrix, cutoff = 0.8)
+#over <- over[, -high_corr_features]  # Remove highly correlated features
+#test <- test[, -high_corr_features]
+
+test_pred_2 <- class::knn(train = over[, -c(17,18)], test = test[, -c(17,18)], cl=over$category, k=5)
+test$category <- as.factor(test$category)
+
+test$predict <- test_pred_2
+confusion <- confusionMatrix(test_pred_2, test$category, positive = "1")
+```
+
+```{r}
+# plot the pca or Umap to see 
+
+#
+
+
+
+# the order of 1,2,3,4 and p1,p2,n1,n2, -> (1,2,4) is positive, 3 is negative
+# Situation 1: change prediction, if cluster in 1,2,4, means it is positive, should predict as 1
+index_p <- rownames(test[test$category == 1 & test$predict == 0 & test$cluster %in% c(1,2,4), ])
+test[index_p,]$predict <- rep(1, length(index_p))
+# Assign pseudo label: change category, if category = 0, predict = 1, and cluster in 1,2,4, means the category is positive 
+index_cp <- rownames(test[test$category == 0 & test$predict == 1 & test$cluster %in% c(1,2,4), ])
+test[index_cp,]$category <- rep(1, length(index_cp))
+# new confusion matrix
+confusion <- confusionMatrix(test$predict, test$category, positive = "1")
+results_df <- data.frame()
+results_df <- rbind(results_df, as.data.frame(t(confusion$byClass)))
+results_df <- results_df[, c("Balanced Accuracy", "Precision",  "Recall", "F1")]
+
+# continue manuelly check them on the NNS software to check if they are positive or not
+
+```
+
+```{r}
+ratio_category <- function(cl){
+  d <- dim(df[df$cluster == cl & df$category == 1,])[1]
+  print(d)
+  n <- dim(df[df$cluster == cl,])[1]
+  print(n)
+  d/n
+}
+ratio_category(1)
+ratio_category(2)
+ratio_category(4)
+ratio_category(3)
+
+```
+
+```{r}
+# Define the number of repeats
+n_repeats <- 10
+k_values <- seq(5, 40, by = 1)  # Loop through odd k values from 5 to 45
+
+# Initialize an empty dataframe to store results
+results_df <- data.frame()
+
+# Loop over k values
+for (k in k_values) {
+  # Repeat experiment for each k
+  tmp_df <- data.frame()
+ for (i in 1:n_repeats) {
+   positive <- da[da$category == 1,]
+   negative <- da[da$category == 0,]
+   #set.seed(123)  # Ensure reproducibility
+   random_rows <- negative[sample(nrow(negative), dim(positive)[1]), ]  # Select `n` random rows
+   tmp <- rbind(positive, random_rows)
+   tmp <- tmp[sample(nrow(tmp)), ]  # Shuffle rows
+    split <- caTools::sample.split(tmp$category, 
+                         SplitRatio = 0.9) # 0.75
+    
+    train <- subset(tmp, 
+                   split == TRUE)
+    test <- subset(tmp, 
+                  split == FALSE)
+    
+    # resample positive as the same number as negative
+    #over <- ROSE::ovun.sample(category~., data = train, method = "over", 
+                              #N = dim(train[train$category==0,])[[1]] * 2)$data
+    test_pred_2 <- class::knn(train = train[,-dim(train)[2]], test = test[,-dim(da)[2]], cl=train$category, k=k)
+    test$category <- as.factor(test$category)
+    confusion <- confusionMatrix(test_pred_2, test$category, positive = "1")
+    tmp_df <- rbind(tmp_df, as.data.frame(t(confusion$byClass))) # "Pos Pred Value" is precision
+ }
+  # calculate mean
+  tmp_df <- tmp_df[, c("Balanced Accuracy", "Precision",  "Recall", "F1")]
+  tmp_r <- c(mean(tmp_df$`Balanced Accuracy`), 
+                  mean(tmp_df$Precision),
+                  mean(tmp_df$Recall),
+                  mean(tmp_df$F1))
+  results_df <- rbind(results_df, tmp_r)
+}
+colnames(results_df) <-  c("Balanced Accuracy", "Precision",  "Recall", "F1")
+# plot Prcision vs. k value
+plot(k_values, results_df$Precision, type = "S",
+     xlab = "Number of Neighbors (k)", ylab = "Precision",
+     main = "KNN Performance", col = "blue", xlim = c(5, 40),
+     xaxt = "n")  # Suppress default x-axis
+
+axis(1, at = seq(5, 40, by = 1))  # Add custom x-axis ticks from 5 to 45
+
+```
+
+```{r}
+getMean <- function(x){
+  mean_accuracy <- mean(x)
+}
+
+```
+Experiment with no sampling, first find best k by training ROC and then use best knn model to plot the ROC curve. Don't need to plot ROC, the AUC is 0.5, not good. Error when calculating Specificity
+
+```{r}
+library(pROC)
+da$category2 <- factor(as.character(da$category))
+levels(da$category2) <- make.names(levels(da$category2))
+
+set.seed(321)
+trainIndex <- createDataPartition(da$category2, p = 0.8, list = FALSE)
+trainSet <- da[trainIndex, ]
+testSet  <- da[-trainIndex, ]
+
+# recalculate knnFit
+# function to return a ROC curve
+# use a knnFit model trained on categorical labels (e.g., "0" and "1") to predict probabilities IF the model is trained with classProbs = TRUE in trainControl().
+ctrl <- trainControl(method="repeatedcv",
+                   number=2, 
+                   repeats = 1,
+                   classProbs=TRUE, 
+                   summaryFunction = twoClassSummary)
+# split to training and testing
+knnFit <- caret::train(category2 ~ ., data = trainSet[, -11], method = "knn", trControl = ctrl, tuneLength = 40)
+# training k 
+plot(knnFit$results$k, knnFit$results$Spec, type = "S",
+   xlab = "Number of Neighbors (k)", ylab = "ROC (AUC)",
+   #ylim = c(0.72, 0.78),
+   main = "KNN ROC Performance", col = "blue")  # Suppress default x-axis
+
+```
+
+```{r}
+# Don't need this part, the AUC value is around 50%. This code can be used later. 
+test_pred <- predict(knnFit, testSet[,-c(11,12)], type = "prob")[,2]  # Get probability of class "1"
+roc_curve <- pROC::roc(testSet$category, test_pred, levels = c("0", "1"))
+print(roc_curve$thresholds)
+# 0.672
+auc_value <- round(roc_curve$auc, 3)  # Round AUC value for clarity
+# plot with ggplot
+# get FPR and TPR
+
+FPR = 1 - roc_curve$specificities
+TPR = roc_curve$sensitivities
+roc_frame <- data.frame(
+    TPR = TPR,
+    FPR = FPR
+  )
+ggplot(roc_frame, aes(x = FPR, y = TPR)) +
+geom_line(color = "blue", size = 1) +  # Plot ROC curve
+geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") + 
+labs(title = "ROC Curve", x = "False Positive Rate (FPR)", y = "True Positive Rate (TPR)") +
+theme_bw() +
+coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +  # Ensure square shape+
+annotate("text", x = 0.6, y = 0.2, label = paste("AUC =", auc_value), color = "blue", size = 5)  # Add AUC text
+
+```
