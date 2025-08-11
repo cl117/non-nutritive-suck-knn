@@ -35,3 +35,37 @@ out$label      <- factor(out$label,      levels = c("X0","X1"))
 cm <- confusionMatrix(out$prediction, out$label, positive = "X1")
 cm
 ```
+
+Console output:
+```
+> cm
+Confusion Matrix and Statistics
+
+          Reference
+Prediction X0 X1
+        X0 55 14
+        X1 22 42
+                                          
+               Accuracy : 0.7293          
+                 95% CI : (0.6455, 0.8027)
+    No Information Rate : 0.5789          
+    P-Value [Acc > NIR] : 0.00023         
+                                          
+                  Kappa : 0.4554          
+                                          
+ Mcnemar's Test P-Value : 0.24335         
+                                          
+            Sensitivity : 0.7500          
+            Specificity : 0.7143          
+         Pos Pred Value : 0.6562          
+         Neg Pred Value : 0.7971          
+             Prevalence : 0.4211          
+         Detection Rate : 0.3158          
+   Detection Prevalence : 0.4812          
+      Balanced Accuracy : 0.7321          
+                                          
+       'Positive' Class : X1
+```
+
+## How to cite
+NNS Feeding Readiness via KNN (k=29), version 1.0. Model and code available in this repository. Please cite the accompanying manuscript when available.
